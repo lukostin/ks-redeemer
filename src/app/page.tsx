@@ -75,6 +75,7 @@ export default function Dashboard() {
 
   // Loading States
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSyncingLive, setIsSyncingLive] = useState(false);
   const [isRunningRedeem, setIsRunningRedeem] = useState(false);
 
   // UI States
@@ -125,7 +126,7 @@ export default function Dashboard() {
         if (showToast) {
           setBanner({
             type: "success",
-            message: `Synced ${data.total} players from Supabase database.`,
+            message: `Refreshed ${data.total} players from Supabase database.`,
           });
           setTimeout(() => setBanner(null), 3000);
         }
@@ -140,6 +141,46 @@ export default function Dashboard() {
   useEffect(() => {
     fetchSupabaseData();
   }, [fetchSupabaseData]);
+
+  // Sync players with live Mightpulse API
+  const handleSyncMightpulse = async (playerId?: string) => {
+    try {
+      setIsSyncingLive(true);
+      setBanner({
+        type: "info",
+        message: playerId
+          ? `Syncing player ${playerId} with live Mightpulse API...`
+          : "Syncing all players in database with live Mightpulse API...",
+      });
+
+      const res = await fetch("/api/players/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(playerId ? { playerId } : {}),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setBanner({
+          type: "success",
+          message: data.message || "Player(s) synced successfully from Mightpulse!",
+        });
+        if (playerId && data.player && selectedProfilePlayer?.playerId === playerId) {
+          setSelectedProfilePlayer((prev) => (prev ? { ...prev, ...data.player } : null));
+        }
+        await fetchSupabaseData();
+      } else {
+        setBanner({
+          type: "error",
+          message: data.error || "Failed to sync with Mightpulse",
+        });
+      }
+    } catch (err: any) {
+      setBanner({ type: "error", message: err.message });
+    } finally {
+      setIsSyncingLive(false);
+    }
+  };
 
   // Live In-Game Lookup by UID in Add Player Modal
   const handleLookupInGame = async (uidToLookup: string) => {
@@ -322,14 +363,31 @@ export default function Dashboard() {
             <span>0 */3 * * * (Every 3h)</span>
           </div>
 
-          {/* Sync Button */}
+          {/* Refresh DB Button */}
           <button
             className="btn btn-secondary btn-sm"
             onClick={() => fetchSupabaseData(true)}
             disabled={isRefreshing}
+            title="Refresh list from Supabase"
           >
             <RotateCw size={14} className={isRefreshing ? "spin" : ""} />
-            <span>{isRefreshing ? "Syncing..." : "Sync DB"}</span>
+            <span>{isRefreshing ? "Refreshing..." : "Refresh DB"}</span>
+          </button>
+
+          {/* Sync Live In-Game Data with Mightpulse */}
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{
+              borderColor: "rgba(0, 210, 255, 0.4)",
+              color: "#38bdf8",
+              background: "rgba(0, 210, 255, 0.08)",
+            }}
+            onClick={() => handleSyncMightpulse()}
+            disabled={isSyncingLive}
+            title="Fetch latest in-game avatar, power, and alliance data from Mightpulse API for all players"
+          >
+            <Sparkles size={14} className={isSyncingLive ? "spin" : ""} />
+            <span>{isSyncingLive ? "Syncing API..." : "Sync with Mightpulse"}</span>
           </button>
 
           {/* Run Redeem Now */}
@@ -764,13 +822,27 @@ export default function Dashboard() {
 
             {/* Profile Action Footer */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "20px" }}>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleCopy(selectedProfilePlayer.playerId)}
-              >
-                <Copy size={14} />
-                <span>Copy Player UID</span>
-              </button>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleCopy(selectedProfilePlayer.playerId)}
+                >
+                  <Copy size={14} />
+                  <span>Copy UID</span>
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  style={{
+                    borderColor: "rgba(0, 210, 255, 0.4)",
+                    color: "#38bdf8",
+                  }}
+                  onClick={() => handleSyncMightpulse(selectedProfilePlayer.playerId)}
+                  disabled={isSyncingLive}
+                >
+                  <Sparkles size={14} className={isSyncingLive ? "spin" : ""} />
+                  <span>{isSyncingLive ? "Syncing..." : "Sync from Mightpulse"}</span>
+                </button>
+              </div>
 
               <button
                 className="btn btn-primary"

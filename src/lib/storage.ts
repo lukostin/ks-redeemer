@@ -63,8 +63,14 @@ export class SupabaseStorage implements StorageAdapter {
       const pid = String(r.playerId || r.player_id || r.uid || r.id || "");
       const uploadImage = r.upload_image || null;
       let avatarUrl = r.avatar_url || null;
-      if (!avatarUrl && uploadImage) {
+      if (uploadImage) {
         avatarUrl = `${AVATAR_CDN_BASE}${uploadImage.replace(/^\/+/, "")}`;
+      } else if (avatarUrl && !avatarUrl.startsWith("http")) {
+        if (avatarUrl.startsWith("/assets/")) {
+          avatarUrl = `https://mightpulse.com${avatarUrl}`;
+        } else {
+          avatarUrl = `${AVATAR_CDN_BASE}${avatarUrl.replace(/^\/+/, "")}`;
+        }
       }
 
       return {
@@ -105,8 +111,14 @@ export class SupabaseStorage implements StorageAdapter {
     const pid = String(r.playerId || r.player_id || r.id || "");
     const uploadImage = r.upload_image || null;
     let avatarUrl = r.avatar_url || null;
-    if (!avatarUrl && uploadImage) {
+    if (uploadImage) {
       avatarUrl = `${AVATAR_CDN_BASE}${uploadImage.replace(/^\/+/, "")}`;
+    } else if (avatarUrl && !avatarUrl.startsWith("http")) {
+      if (avatarUrl.startsWith("/assets/")) {
+        avatarUrl = `https://mightpulse.com${avatarUrl}`;
+      } else {
+        avatarUrl = `${AVATAR_CDN_BASE}${avatarUrl.replace(/^\/+/, "")}`;
+      }
     }
 
     return {
@@ -206,6 +218,11 @@ export class SupabaseStorage implements StorageAdapter {
     if (updates.power !== undefined) payload.power = updates.power;
     if (updates.avatar_url !== undefined) payload.avatar_url = updates.avatar_url;
 
+    if (updates.alliance_abbr !== undefined) payload.alliance_abbr = updates.alliance_abbr;
+    if (updates.alliance_name !== undefined) payload.alliance_name = updates.alliance_name;
+    if (updates.upload_image !== undefined) payload.upload_image = updates.upload_image;
+    if (updates.town_center_level !== undefined) payload.town_center_level = updates.town_center_level;
+
     const res = await fetch(`${SUPABASE_URL}/rest/v1/players?playerId=eq.${clean}`, {
       method: "PATCH",
       headers: getHeaders(true),
@@ -224,11 +241,41 @@ export class SupabaseStorage implements StorageAdapter {
       playerId: clean,
       name: r?.nick_name || updates.nick_name || updates.name || "",
       nick_name: r?.nick_name || updates.nick_name || updates.name || "",
+      kid: r?.kid !== undefined ? r.kid : updates.kid,
+      alliance_abbr: r?.alliance_abbr !== undefined ? r.alliance_abbr : updates.alliance_abbr,
+      alliance_name: r?.alliance_name !== undefined ? r.alliance_name : updates.alliance_name,
+      upload_image: r?.upload_image !== undefined ? r.upload_image : updates.upload_image,
+      avatar_url: r?.avatar_url !== undefined ? r.avatar_url : updates.avatar_url,
+      power: r?.power !== undefined ? r.power : updates.power,
+      town_center_level: r?.town_center_level !== undefined ? r.town_center_level : updates.town_center_level,
       status: r?.status || updates.status || "active",
       notes: r?.notes || updates.notes || "",
       createdAt: r?.created_at || new Date().toISOString(),
       updatedAt: r?.created_at || new Date().toISOString(),
     };
+  }
+
+  // Helper: Sync a player directly with live Mightpulse API
+  async syncPlayerFromMightpulse(playerId: string): Promise<Player | null> {
+    const clean = playerId.trim();
+    const inGame = await fetchPlayerDetailsFromMightpulse(clean);
+    if (!inGame) return null;
+
+    let fullAvatar = inGame.avatar_url;
+    if (inGame.upload_image && !fullAvatar) {
+      fullAvatar = `${AVATAR_CDN_BASE}${inGame.upload_image.replace(/^\/+/, "")}`;
+    }
+
+    return this.updatePlayer(clean, {
+      nick_name: inGame.nick_name,
+      kid: inGame.kid,
+      alliance_abbr: inGame.alliance_abbr,
+      alliance_name: inGame.alliance_name,
+      upload_image: inGame.upload_image,
+      avatar_url: fullAvatar,
+      power: inGame.power,
+      town_center_level: inGame.town_center_level,
+    });
   }
 
   // 5. Delete Player from Supabase

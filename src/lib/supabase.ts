@@ -116,8 +116,14 @@ export async function getSupabasePlayersWithGifts(): Promise<{
       const count = giftCountMap[resolvedPlayerId] || 0;
       const uploadImage = p.upload_image || null;
       let avatarUrl = p.avatar_url || null;
-      if (!avatarUrl && uploadImage) {
-        avatarUrl = `${AVATAR_CDN_BASE}${uploadImage}`;
+      if (uploadImage) {
+        avatarUrl = `${AVATAR_CDN_BASE}${uploadImage.replace(/^\/+/, "")}`;
+      } else if (avatarUrl && !avatarUrl.startsWith("http")) {
+        if (avatarUrl.startsWith("/assets/")) {
+          avatarUrl = `https://mightpulse.com${avatarUrl}`;
+        } else {
+          avatarUrl = `${AVATAR_CDN_BASE}${avatarUrl.replace(/^\/+/, "")}`;
+        }
       }
 
       return {
