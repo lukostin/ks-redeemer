@@ -14,27 +14,19 @@ import {
   Edit2,
   Copy,
   Check,
-  Server,
-  Database,
-  ExternalLink,
-  ShieldCheck,
   Search,
-  Filter,
   Sparkles,
-  History,
   X,
   UserCheck,
   UserX,
   ChevronLeft,
   ChevronRight,
   User,
-  Award,
   Zap,
   Shield,
   Castle,
-  Crosshair,
 } from "lucide-react";
-import { GiftCode, Player, RedemptionLog, DashboardStats, CronRunSummary } from "@/lib/types";
+import { CronRunSummary } from "@/lib/types";
 
 interface SupabasePlayerCard {
   id?: string | number;
@@ -69,11 +61,9 @@ function formatPower(power?: number | string | null): string {
 }
 
 export default function Dashboard() {
-  // Supabase & Local Players
+  // Supabase Players
   const [supabasePlayers, setSupabasePlayers] = useState<SupabasePlayerCard[]>([]);
-  const [supabaseError, setSupabaseError] = useState<string | null>(null);
   const [supabaseTotal, setSupabaseTotal] = useState(0);
-  const [totalAutoRedeemedGifts, setTotalAutoRedeemedGifts] = useState(0);
 
   // Pagination & Search States
   const [searchPlayerId, setSearchPlayerId] = useState("");
@@ -83,13 +73,7 @@ export default function Dashboard() {
   // Selected Player for Profile Modal
   const [selectedProfilePlayer, setSelectedProfilePlayer] = useState<SupabasePlayerCard | null>(null);
 
-  // Live Gift Codes, Logs & Stats
-  const [giftCodes, setGiftCodes] = useState<GiftCode[]>([]);
-  const [logs, setLogs] = useState<RedemptionLog[]>([]);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-
   // Loading States
-  const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isRunningRedeem, setIsRunningRedeem] = useState(false);
 
@@ -103,7 +87,6 @@ export default function Dashboard() {
   // Modals
   const [isAddPlayerOpen, setIsAddPlayerOpen] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState<SupabasePlayerCard | null>(null);
-  const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   // Add Player Form State & In-Game Lookup
   const [formPlayerId, setFormPlayerId] = useState("");
@@ -122,9 +105,10 @@ export default function Dashboard() {
     setTimeout(() => setCopiedText(null), 2000);
   };
 
-  // Fetch Supabase players with pagination and search
-  const fetchSupabaseData = useCallback(async () => {
+  // Fetch Supabase players directly
+  const fetchSupabaseData = useCallback(async (showToast = false) => {
     try {
+      setIsRefreshing(true);
       const query = new URLSearchParams({
         page: String(currentPage),
         limit: String(itemsPerPage),
@@ -134,111 +118,28 @@ export default function Dashboard() {
       const res = await fetch(`/api/supabase/players?${query.toString()}`);
       const data = await res.json();
 
-      if (data.success && data.players && data.players.length > 0) {
+      if (data.success && Array.isArray(data.players)) {
         setSupabasePlayers(data.players);
         setSupabaseTotal(data.total);
-        setTotalAutoRedeemedGifts(data.totalGiftsCount || 0);
-        setSupabaseError(null);
-      } else {
-        if (data.error) {
-          setSupabaseError(data.error);
+
+        if (showToast) {
+          setBanner({
+            type: "success",
+            message: `Synced ${data.total} players from Supabase database.`,
+          });
+          setTimeout(() => setBanner(null), 3000);
         }
-        // Fallback to local players storage so UI is fully populated
-        const localRes = await fetch("/api/players");
-        const localData = await localRes.json();
-        const logsRes = await fetch("/api/logs?limit=500");
-        const logsData = await logsRes.json();
-        const logsList: RedemptionLog[] = logsData.logs || [];
-
-        // Count redemptions per player from logs
-        const countMap: Record<string, number> = {};
-        logsList.forEach((l) => {
-          if (l.status === "SUCCESS") {
-            countMap[l.playerId] = (countMap[l.playerId] || 0) + 1;
-          }
-        });
-
-        let pList: SupabasePlayerCard[] = (localData.players || []).map((p: Player) => ({
-          id: p.id,
-          playerId: p.playerId,
-          name: p.nick_name || p.name,
-          nick_name: p.nick_name || p.name,
-          kid: p.kid,
-          alliance_abbr: p.alliance_abbr,
-          alliance_name: p.alliance_name,
-          upload_image: p.upload_image,
-          avatar_url: p.avatar_url,
-          power: p.power,
-          town_center_level: p.town_center_level,
-          status: p.status,
-          notes: p.notes,
-          redeemedCount: countMap[p.playerId] || 0,
-          createdAt: p.createdAt,
-        }));
-
-        if (searchPlayerId) {
-          const q = searchPlayerId.toLowerCase();
-          pList = pList.filter(
-            (p) =>
-              p.playerId.toLowerCase().includes(q) ||
-              (p.nick_name && p.nick_name.toLowerCase().includes(q)) ||
-              (p.name && p.name.toLowerCase().includes(q)) ||
-              (p.alliance_abbr && p.alliance_abbr.toLowerCase().includes(q))
-          );
-        }
-
-        const totalItems = pList.length;
-        const start = (currentPage - 1) * itemsPerPage;
-        setSupabasePlayers(pList.slice(start, start + itemsPerPage));
-        setSupabaseTotal(totalItems);
       }
     } catch (err: any) {
-      console.warn("Could not load from Supabase API, using local storage:", err);
-    }
-  }, [currentPage, itemsPerPage, searchPlayerId]);
-
-  // Fetch live gift codes, logs & stats
-  const fetchAuxData = useCallback(async (showToast = false) => {
-    try {
-      setIsRefreshing(true);
-      const [codesRes, logsRes, statsRes] = await Promise.all([
-        fetch("/api/gift-codes"),
-        fetch("/api/logs?limit=50"),
-        fetch("/api/stats"),
-      ]);
-
-      const [codesData, logsData, statsData] = await Promise.all([
-        codesRes.json(),
-        logsRes.json(),
-        statsRes.json(),
-      ]);
-
-      if (codesData.success) setGiftCodes(codesData.codes || []);
-      if (logsData.success) setLogs(logsData.logs || []);
-      if (statsData.success) setStats(statsData.stats || null);
-
-      if (showToast) {
-        setBanner({
-          type: "success",
-          message: "Data synced from Kingshot API & Supabase DB.",
-        });
-        setTimeout(() => setBanner(null), 3000);
-      }
-    } catch (err: any) {
-      console.error("Aux fetch error:", err);
+      console.error("Supabase fetch error:", err);
     } finally {
-      setLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [currentPage, itemsPerPage, searchPlayerId]);
 
   useEffect(() => {
     fetchSupabaseData();
   }, [fetchSupabaseData]);
-
-  useEffect(() => {
-    fetchAuxData();
-  }, [fetchAuxData]);
 
   // Live In-Game Lookup by UID in Add Player Modal
   const handleLookupInGame = async (uidToLookup: string) => {
@@ -269,14 +170,14 @@ export default function Dashboard() {
     }
   };
 
-  // Trigger auto-redeem for all
+  // Trigger auto-redeem for all players
   const handleRunRedeemAll = async () => {
     if (isRunningRedeem) return;
     try {
       setIsRunningRedeem(true);
       setBanner({
         type: "info",
-        message: "Automated redemption cycle running across active players & gift codes...",
+        message: "Redemption cycle running across all active players in database...",
       });
 
       const res = await fetch("/api/redeem", {
@@ -290,7 +191,7 @@ export default function Dashboard() {
         const s: CronRunSummary = data.summary;
         setBanner({
           type: "success",
-          message: `Cycle Complete in ${(s.durationMs / 1000).toFixed(1)}s! Success: ${s.successCount} • Already Redeemed: ${s.alreadyRedeemedCount} • Failed: ${s.failedCount}`,
+          message: `Cycle Complete! Success: ${s.successCount} • Already Redeemed: ${s.alreadyRedeemedCount} • Failed: ${s.failedCount}`,
         });
       } else {
         setBanner({
@@ -298,7 +199,7 @@ export default function Dashboard() {
           message: "Redemption error: " + (data.error || "Execution failed"),
         });
       }
-      await Promise.all([fetchSupabaseData(), fetchAuxData()]);
+      await fetchSupabaseData();
     } catch (err: any) {
       setBanner({ type: "error", message: err.message });
     } finally {
@@ -327,7 +228,7 @@ export default function Dashboard() {
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
-        setBanner({ type: "success", message: `Player updated successfully!` });
+        setBanner({ type: "success", message: `Player updated in Supabase!` });
       } else {
         const res = await fetch("/api/players", {
           method: "POST",
@@ -351,7 +252,7 @@ export default function Dashboard() {
         if (!data.success) throw new Error(data.error);
         setBanner({
           type: "success",
-          message: `Player ${data.player?.nick_name || formPlayerId} added with full in-game details!`,
+          message: `Player ${data.player?.nick_name || formPlayerId} saved directly to Supabase DB!`,
         });
       }
 
@@ -406,10 +307,10 @@ export default function Dashboard() {
           <div>
             <div className="brand-title">
               KS REDEEMER
-              <span className="brand-badge">PRO AUTO-ENGINE</span>
+              <span className="brand-badge">SUPABASE CONNECTED</span>
             </div>
             <div className="brand-subtitle">
-              Automated King Shot Gift Code Engine &bull; In-Game Profile Intelligence
+              King Shot Automated Gift Code Engine &bull; In-Game Intelligence
             </div>
           </div>
         </div>
@@ -424,20 +325,11 @@ export default function Dashboard() {
           {/* Sync Button */}
           <button
             className="btn btn-secondary btn-sm"
-            onClick={() => {
-              fetchSupabaseData();
-              fetchAuxData(true);
-            }}
+            onClick={() => fetchSupabaseData(true)}
             disabled={isRefreshing}
           >
             <RotateCw size={14} className={isRefreshing ? "spin" : ""} />
             <span>{isRefreshing ? "Syncing..." : "Sync DB"}</span>
-          </button>
-
-          {/* Vercel & DB Setup Modal */}
-          <button className="btn btn-secondary btn-sm" onClick={() => setIsGuideOpen(true)}>
-            <Database size={14} />
-            <span>DB & Cron Info</span>
           </button>
 
           {/* Run Redeem Now */}
@@ -476,80 +368,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* SUPABASE PERMISSION NOTICE (IF SCHEMA ACCESS IS RESTRICTED TO SERVICE_ROLE) */}
-      {supabaseError && supabaseError.includes("permission denied for schema kingshot") && (
-        <div
-          className="banner banner-warning"
-          style={{ flexDirection: "column", alignItems: "flex-start", gap: "8px" }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
-            <AlertCircle size={18} />
-            <span>Supabase Schema Permission Notice</span>
-          </div>
-          <p style={{ fontSize: "13px" }}>
-            PostgreSQL requires grant permissions for schema <code style={{ color: "#38bdf8" }}>kingshot</code> to the <code style={{ color: "#38bdf8" }}>anon</code> role. To enable direct anon queries, run this in your Supabase SQL Editor:
-          </p>
-          <div
-            className="code-block"
-            style={{ width: "100%", padding: "10px", fontSize: "12px", background: "#0a0e17" }}
-          >
-            GRANT USAGE ON SCHEMA kingshot TO anon, authenticated, service_role;<br />
-            GRANT SELECT ON ALL TABLES IN SCHEMA kingshot TO anon, authenticated, service_role;
-          </div>
-          <p style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-            (Displaying loaded player profiles and verified Mightpulse details in the meantime)
-          </p>
-        </div>
-      )}
-
-      {/* STATS OVERVIEW */}
-      <section className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-info">
-            <span className="stat-label">Active Gift Codes</span>
-            <span className="stat-value">{giftCodes.filter((c) => !c.isExpired).length}</span>
-            <span className="stat-subtext">kingshot.net/api/gift-codes</span>
-          </div>
-          <div className="stat-icon gold">
-            <Gift size={24} />
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-info">
-            <span className="stat-label">Tracked In-Game Players</span>
-            <span className="stat-value">{supabaseTotal}</span>
-            <span className="stat-subtext">With auto-redemption enabled</span>
-          </div>
-          <div className="stat-icon cyan">
-            <Users size={24} />
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-info">
-            <span className="stat-label">Auto-Redeemed Codes Logged</span>
-            <span className="stat-value">{logs.filter((l) => l.status === "SUCCESS").length || totalAutoRedeemedGifts}</span>
-            <span className="stat-subtext">Successful gift claims</span>
-          </div>
-          <div className="stat-icon green">
-            <Award size={24} />
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-info">
-            <span className="stat-label">Scheduler Status</span>
-            <span className="stat-value" style={{ fontSize: "20px" }}>Every 3 Hours</span>
-            <span className="stat-subtext">Vercel Cron Active</span>
-          </div>
-          <div className="stat-icon purple">
-            <Clock size={24} />
-          </div>
-        </div>
-      </section>
-
-      {/* PRIMARY SECTION: PLAYERS CARDS WITH IN-GAME ATTRIBUTES */}
+      {/* PRIMARY SECTION: PLAYER CARDS & IN-GAME INTELLIGENCE */}
       <section className="section">
         <div className="section-header">
           <div>
@@ -566,16 +385,16 @@ export default function Dashboard() {
                   fontWeight: 700,
                 }}
               >
-                {supabaseTotal} Players Registered
+                {supabaseTotal} Players in Supabase DB
               </span>
             </div>
             <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginTop: "4px" }}>
-              Displays in-game Nickname, Kingdom, Alliance, Power, and Auto-Redeemed Codes. Click any card to open profile.
+              Displays in-game Avatar, Nickname, Kingdom, Alliance, Power, and Auto-Redeemed Codes. Click any card to open profile.
             </p>
           </div>
 
           <div className="section-actions">
-            {/* Search by Player ID */}
+            {/* Search by Player UID */}
             <div style={{ position: "relative", minWidth: "280px" }}>
               <Search
                 size={16}
@@ -589,7 +408,7 @@ export default function Dashboard() {
               />
               <input
                 type="text"
-                placeholder="Search by Player UID (e.g. 47964263)..."
+                placeholder="Search by Player UID (e.g. 196273992)..."
                 className="input"
                 style={{ paddingLeft: "36px", height: "40px" }}
                 value={searchPlayerId}
@@ -731,7 +550,7 @@ export default function Dashboard() {
                       </span>
                     </div>
 
-                    {/* Optional Note / Status text */}
+                    {/* Optional Note / Tag text */}
                     {player.notes && (
                       <p
                         style={{
@@ -987,7 +806,7 @@ export default function Dashboard() {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 47964263"
+                    placeholder="e.g. 196273992"
                     className="input"
                     value={formPlayerId}
                     onChange={(e) => {
@@ -1011,7 +830,7 @@ export default function Dashboard() {
                   </button>
                 </div>
                 <span className="form-hint">
-                  Enter UID (e.g. 47964263). Clicking &quot;Fetch&quot; retrieves live in-game details from Mightpulse.
+                  Enter UID. Clicking &quot;Fetch&quot; retrieves live in-game details from Mightpulse.
                 </span>
               </div>
 
@@ -1101,61 +920,6 @@ export default function Dashboard() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* VERCEL CRON & DATABASE SETUP MODAL */}
-      {isGuideOpen && (
-        <div className="modal-overlay" onClick={() => setIsGuideOpen(false)}>
-          <div className="modal-content" style={{ maxWidth: "680px" }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Server size={20} color="#00d2ff" />
-                <span>Vercel Cron &amp; Database Intelligence Details</span>
-              </div>
-              <button
-                onClick={() => setIsGuideOpen(false)}
-                style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "16px", fontSize: "14px", lineHeight: "1.6", color: "var(--text-secondary)" }}>
-              <div>
-                <strong style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
-                  <Crosshair size={16} color="#00d2ff" />
-                  Live In-Game API Integration
-                </strong>
-                <p style={{ marginTop: "4px" }}>
-                  Connected to <code style={{ color: "#38bdf8" }}>https://mightpulse.com/api/players/[uid]</code> to automatically pull:
-                </p>
-                <ul style={{ paddingLeft: "20px", marginTop: "4px" }}>
-                  <li><code style={{ color: "#38bdf8" }}>nick_name</code> (Player name)</li>
-                  <li><code style={{ color: "#38bdf8" }}>kid</code> (Kingdom number)</li>
-                  <li><code style={{ color: "#38bdf8" }}>alliance_abbr</code> &amp; <code style={{ color: "#38bdf8" }}>alliance_name</code></li>
-                  <li><code style={{ color: "#38bdf8" }}>upload_image</code> / <code style={{ color: "#38bdf8" }}>avatar_url</code></li>
-                  <li><code style={{ color: "#38bdf8" }}>power</code> (Combat rating)</li>
-                </ul>
-              </div>
-
-              <div>
-                <strong style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
-                  <Clock size={16} color="#f59e0b" />
-                  Vercel Cron (0 */3 * * *)
-                </strong>
-                <p style={{ marginTop: "4px" }}>
-                  Automatically hits <code style={{ color: "#38bdf8" }}>/api/cron/redeem</code> every 3 hours with zero human intervention.
-                </p>
-              </div>
-            </div>
-
-            <div style={{ marginTop: "24px", display: "flex", justifyContent: "flex-end" }}>
-              <button className="btn btn-primary" onClick={() => setIsGuideOpen(false)}>
-                Got It
-              </button>
-            </div>
           </div>
         </div>
       )}
