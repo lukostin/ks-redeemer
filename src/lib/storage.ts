@@ -1,290 +1,293 @@
-import fs from "fs";
-import path from "path";
 import { Player, RedemptionLog, CronRunSummary, StorageAdapter } from "./types";
 import { fetchPlayerDetailsFromMightpulse } from "./mightpulse";
 
-// Default seed players list with real in-game details
-const DEFAULT_PLAYERS: Player[] = [
-  {
-    id: "p-mightpulse-1",
-    playerId: "47964263",
-    name: "『兔子_ᴾᴴ』",
-    nick_name: "『兔子_ᴾᴴ』",
-    kid: 1349,
-    alliance_abbr: "313",
-    alliance_name: "REBOOT",
-    upload_image: "2026/10/15/Gg3ZDL_1792024155.png",
-    avatar_url: "https://got-global-avatar.akamaized.net/avatar/2026/10/15/Gg3ZDL_1792024155.png",
-    power: 296088481,
-    town_center_level: 55,
-    status: "active",
-    notes: "Verified in-game profile from Mightpulse (Kingdom 1349)",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "p-sample-main",
-    playerId: "76301393",
-    name: "LordAustin (Main)",
-    nick_name: "LordAustin",
-    kid: 1102,
-    alliance_abbr: "VNG",
-    alliance_name: "Vanguard Elite",
-    upload_image: null,
-    avatar_url: null,
-    power: 184500000,
-    town_center_level: 30,
-    status: "active",
-    notes: "Primary King Shot account (sample payload)",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "p-sample-alt1",
-    playerId: "81204918",
-    name: "ValkyriePrime",
-    nick_name: "ValkyriePrime",
-    kid: 1349,
-    alliance_abbr: "313",
-    alliance_name: "REBOOT",
-    upload_image: null,
-    avatar_url: null,
-    power: 142000000,
-    town_center_level: 28,
-    status: "active",
-    notes: "Auto-redeem verified recipient",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "p-sample-alt2",
-    playerId: "65412903",
-    name: "DragonSlayer_01",
-    nick_name: "DragonSlayer",
-    kid: 994,
-    alliance_abbr: "ARC",
-    alliance_name: "Archangels",
-    upload_image: null,
-    avatar_url: null,
-    power: 89000000,
-    town_center_level: 26,
-    status: "paused",
-    notes: "Reserved backup account",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
+const SUPABASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://rcqdzisofoblqvbjvcbp.supabase.co";
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjcWR6aXNvZm9ibHF2Ymp2Y2JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NzgwODgsImV4cCI6MjEwMjM1NDA4OH0.qF1Ay8-UIzalTDf4OcewhP_SdIAsMzM6sCT3P88syNo";
 
-function getDataDir(): string {
-  const isVercel = !!process.env.VERCEL;
-  if (isVercel) {
-    const tmpDir = path.join("/tmp", "ks-redeemer-data");
-    if (!fs.existsSync(tmpDir)) {
-      try {
-        fs.mkdirSync(tmpDir, { recursive: true });
-      } catch (err) {
-        console.error("Failed to create /tmp directory", err);
-      }
-    }
-    return tmpDir;
-  }
+const AVATAR_CDN_BASE = "https://got-global-avatar.akamaized.net/avatar/";
 
-  const localDir = path.join(process.cwd(), "data");
-  if (!fs.existsSync(localDir)) {
-    try {
-      fs.mkdirSync(localDir, { recursive: true });
-    } catch (err) {
-      console.error("Failed to create local data directory", err);
-    }
+function getHeaders(isWrite = false): Record<string, string> {
+  const headers: Record<string, string> = {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${SUPABASE_KEY}`,
+    Accept: "application/json",
+    "Accept-Profile": "kingshot",
+  };
+  if (isWrite) {
+    headers["Content-Type"] = "application/json";
+    headers["Content-Profile"] = "kingshot";
+    headers["Prefer"] = "return=representation";
   }
-  return localDir;
+  return headers;
 }
 
-let cachedPlayers: Player[] | null = null;
-let cachedLogs: RedemptionLog[] | null = null;
-let cachedLastCronRun: CronRunSummary | null = null;
-
-class FileAndMemoryStorage implements StorageAdapter {
-  private playersFile = path.join(getDataDir(), "players.json");
-  private logsFile = path.join(getDataDir(), "logs.json");
-  private stateFile = path.join(getDataDir(), "state.json");
-
+/**
+ * Direct Supabase Database Storage Adapter
+ * Connects directly to kingshot.players and kingshot.player-gifts
+ */
+export class SupabaseStorage implements StorageAdapter {
+  // 1. Fetch Players from Supabase
   async getPlayers(): Promise<Player[]> {
-    if (cachedPlayers) {
-      return [...cachedPlayers];
+    const url = `${SUPABASE_URL}/rest/v1/players?select=*`;
+    const res = await fetch(url, {
+      headers: getHeaders(),
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Supabase query error (${res.status}): ${err}`);
     }
 
+    const rows: any[] = await res.json();
+
+    // Fetch gifts count to map redeemedCount
+    let giftsCountMap: Record<string, number> = {};
     try {
-      if (fs.existsSync(this.playersFile)) {
-        const raw = fs.readFileSync(this.playersFile, "utf-8");
-        cachedPlayers = JSON.parse(raw);
-        return [...(cachedPlayers || [])];
+      const giftsRes = await fetch(`${SUPABASE_URL}/rest/v1/player-gifts?select=player_id`, {
+        headers: getHeaders(),
+        cache: "no-store",
+      });
+      if (giftsRes.ok) {
+        const gifts: any[] = await giftsRes.json();
+        gifts.forEach((g) => {
+          const pid = String(g.player_id || g.playerId || "");
+          if (pid) giftsCountMap[pid] = (giftsCountMap[pid] || 0) + 1;
+        });
       }
-    } catch (e) {
-      console.warn("Could not read players file, using default players:", e);
+    } catch {
+      // ignore
     }
 
-    cachedPlayers = [...DEFAULT_PLAYERS];
-    await this.savePlayers(cachedPlayers);
-    return [...cachedPlayers];
+    return rows.map((r) => {
+      const pid = String(r.player_id || r.playerId || r.uid || r.id || "");
+      const uploadImage = r.upload_image || null;
+      let avatarUrl = r.avatar_url || null;
+      if (!avatarUrl && uploadImage) {
+        avatarUrl = `${AVATAR_CDN_BASE}${uploadImage}`;
+      }
+
+      return {
+        id: String(r.id || pid),
+        playerId: pid,
+        name: r.nick_name || r.name || `Player ${pid}`,
+        nick_name: r.nick_name || r.name || `Player ${pid}`,
+        kid: r.kid !== undefined ? r.kid : null,
+        alliance_abbr: r.alliance_abbr || null,
+        alliance_name: r.alliance_name || null,
+        upload_image: uploadImage,
+        avatar_url: avatarUrl,
+        power: r.power !== undefined ? r.power : null,
+        town_center_level: r.town_center_level || r.stove_lv || null,
+        status: r.status === "paused" ? "paused" : "active",
+        notes: r.notes || "",
+        redeemedCount: giftsCountMap[pid] || 0,
+        createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+        updatedAt: r.updated_at || r.updatedAt || new Date().toISOString(),
+      };
+    });
   }
 
+  // 2. Get Single Player
   async getPlayer(playerId: string): Promise<Player | null> {
-    const players = await this.getPlayers();
-    return players.find((p) => p.playerId === playerId || p.id === playerId) || null;
+    const clean = playerId.trim();
+    const url = `${SUPABASE_URL}/rest/v1/players?or=(player_id.eq.${clean},id.eq.${clean})&select=*`;
+    const res = await fetch(url, {
+      headers: getHeaders(),
+      cache: "no-store",
+    });
+
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!rows || rows.length === 0) return null;
+
+    const r = rows[0];
+    const pid = String(r.player_id || r.playerId || r.id || "");
+    return {
+      id: String(r.id || pid),
+      playerId: pid,
+      name: r.nick_name || r.name || `Player ${pid}`,
+      nick_name: r.nick_name || r.name || `Player ${pid}`,
+      kid: r.kid,
+      alliance_abbr: r.alliance_abbr,
+      alliance_name: r.alliance_name,
+      upload_image: r.upload_image,
+      avatar_url: r.avatar_url,
+      power: r.power,
+      town_center_level: r.town_center_level,
+      status: r.status === "paused" ? "paused" : "active",
+      notes: r.notes || "",
+      createdAt: r.created_at || new Date().toISOString(),
+      updatedAt: r.updated_at || new Date().toISOString(),
+    };
   }
 
+  // 3. Add Player to Supabase (Enriched with Mightpulse)
   async addPlayer(data: Omit<Player, "id" | "createdAt" | "updatedAt">): Promise<Player> {
-    const players = await this.getPlayers();
     const cleanUid = data.playerId.trim();
 
-    const existing = players.find((p) => p.playerId.trim() === cleanUid);
-    if (existing) {
-      throw new Error(`Player with ID "${cleanUid}" already exists.`);
-    }
-
-    // Attempt to enrich with live in-game details from Mightpulse API
-    let inGameDetails: any = null;
+    // Query in-game details from Mightpulse
+    let inGame: any = null;
     try {
-      inGameDetails = await fetchPlayerDetailsFromMightpulse(cleanUid);
-    } catch (err) {
-      console.warn("Could not fetch Mightpulse details:", err);
-    }
-
-    const now = new Date().toISOString();
-    const newPlayer: Player = {
-      id: "p-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6),
-      playerId: cleanUid,
-      name: inGameDetails?.nick_name || data.name?.trim() || `Player ${cleanUid}`,
-      nick_name: inGameDetails?.nick_name || data.nick_name?.trim() || data.name?.trim() || `Player ${cleanUid}`,
-      kid: inGameDetails?.kid !== undefined ? inGameDetails.kid : data.kid || null,
-      alliance_abbr: inGameDetails?.alliance_abbr || data.alliance_abbr || null,
-      alliance_name: inGameDetails?.alliance_name || data.alliance_name || null,
-      upload_image: inGameDetails?.upload_image || data.upload_image || null,
-      avatar_url: inGameDetails?.avatar_url || data.avatar_url || null,
-      power: inGameDetails?.power !== undefined ? inGameDetails.power : data.power || null,
-      town_center_level: inGameDetails?.town_center_level || data.town_center_level || null,
-      status: data.status || "active",
-      notes: data.notes?.trim() || "",
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    players.unshift(newPlayer);
-    cachedPlayers = players;
-    await this.savePlayers(players);
-    return newPlayer;
-  }
-
-  async updatePlayer(playerId: string, updates: Partial<Player>): Promise<Player> {
-    const players = await this.getPlayers();
-    const index = players.findIndex((p) => p.playerId === playerId || p.id === playerId);
-    if (index === -1) {
-      throw new Error(`Player with ID "${playerId}" not found.`);
-    }
-
-    const current = players[index];
-    const updated: Player = {
-      ...current,
-      ...updates,
-      playerId: updates.playerId ? updates.playerId.trim() : current.playerId,
-      name: updates.name !== undefined ? updates.name.trim() : current.name,
-      nick_name: updates.nick_name !== undefined ? updates.nick_name.trim() : current.nick_name,
-      notes: updates.notes !== undefined ? updates.notes.trim() : current.notes,
-      status: updates.status || current.status,
-      updatedAt: new Date().toISOString(),
-    };
-
-    players[index] = updated;
-    cachedPlayers = players;
-    await this.savePlayers(players);
-    return updated;
-  }
-
-  async deletePlayer(playerId: string): Promise<boolean> {
-    const players = await this.getPlayers();
-    const filtered = players.filter((p) => p.playerId !== playerId && p.id !== playerId);
-    if (filtered.length === players.length) {
-      return false;
-    }
-
-    cachedPlayers = filtered;
-    await this.savePlayers(filtered);
-    return true;
-  }
-
-  async getLogs(limit: number = 100): Promise<RedemptionLog[]> {
-    if (cachedLogs) {
-      return cachedLogs.slice(0, limit);
-    }
-
-    try {
-      if (fs.existsSync(this.logsFile)) {
-        const raw = fs.readFileSync(this.logsFile, "utf-8");
-        cachedLogs = JSON.parse(raw);
-        return (cachedLogs || []).slice(0, limit);
-      }
+      inGame = await fetchPlayerDetailsFromMightpulse(cleanUid);
     } catch (e) {
-      console.warn("Could not read logs file, returning empty array:", e);
+      console.warn("Mightpulse lookup failed:", e);
     }
 
-    cachedLogs = [];
-    return [];
+    const payload: any = {
+      player_id: cleanUid,
+      name: inGame?.nick_name || data.name || data.nick_name || `Player ${cleanUid}`,
+      nick_name: inGame?.nick_name || data.nick_name || data.name || `Player ${cleanUid}`,
+      status: data.status || "active",
+      notes: data.notes || "",
+    };
+
+    if (inGame?.kid !== undefined) payload.kid = inGame.kid;
+    if (inGame?.alliance_abbr) payload.alliance_abbr = inGame.alliance_abbr;
+    if (inGame?.alliance_name) payload.alliance_name = inGame.alliance_name;
+    if (inGame?.upload_image) payload.upload_image = inGame.upload_image;
+    if (inGame?.avatar_url) payload.avatar_url = inGame.avatar_url;
+    if (inGame?.power !== undefined) payload.power = inGame.power;
+    if (inGame?.town_center_level) payload.town_center_level = inGame.town_center_level;
+
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/players`, {
+      method: "POST",
+      headers: getHeaders(true),
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Failed to insert player into Supabase: ${err}`);
+    }
+
+    const inserted = await res.json();
+    const r = Array.isArray(inserted) ? inserted[0] : inserted;
+
+    return {
+      id: String(r?.id || cleanUid),
+      playerId: cleanUid,
+      name: r?.name || payload.name,
+      nick_name: r?.nick_name || payload.nick_name,
+      kid: r?.kid || payload.kid,
+      alliance_abbr: r?.alliance_abbr || payload.alliance_abbr,
+      alliance_name: r?.alliance_name || payload.alliance_name,
+      upload_image: r?.upload_image || payload.upload_image,
+      avatar_url: r?.avatar_url || payload.avatar_url,
+      power: r?.power || payload.power,
+      town_center_level: r?.town_center_level || payload.town_center_level,
+      status: r?.status || payload.status,
+      notes: r?.notes || payload.notes,
+      createdAt: r?.created_at || new Date().toISOString(),
+      updatedAt: r?.updated_at || new Date().toISOString(),
+    };
   }
 
-  async addLogs(newLogs: RedemptionLog[]): Promise<void> {
-    const current = await this.getLogs(500);
-    const updated = [...newLogs, ...current].slice(0, 500);
-    cachedLogs = updated;
-    await this.saveLogs(updated);
+  // 4. Update Player
+  async updatePlayer(playerId: string, updates: Partial<Player>): Promise<Player> {
+    const clean = playerId.trim();
+    const payload: any = {};
+    if (updates.name !== undefined) payload.name = updates.name;
+    if (updates.nick_name !== undefined) payload.nick_name = updates.nick_name;
+    if (updates.status !== undefined) payload.status = updates.status;
+    if (updates.notes !== undefined) payload.notes = updates.notes;
+    if (updates.kid !== undefined) payload.kid = updates.kid;
+    if (updates.power !== undefined) payload.power = updates.power;
+
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/players?player_id=eq.${clean}`, {
+      method: "PATCH",
+      headers: getHeaders(true),
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Failed to update player in Supabase: ${err}`);
+    }
+
+    const updated = await res.json();
+    const r = Array.isArray(updated) ? updated[0] : updated;
+    return {
+      id: String(r?.id || clean),
+      playerId: clean,
+      name: r?.name || updates.name || "",
+      nick_name: r?.nick_name || updates.nick_name || "",
+      status: r?.status || updates.status || "active",
+      notes: r?.notes || updates.notes || "",
+      createdAt: r?.created_at || new Date().toISOString(),
+      updatedAt: r?.updated_at || new Date().toISOString(),
+    };
+  }
+
+  // 5. Delete Player
+  async deletePlayer(playerId: string): Promise<boolean> {
+    const clean = playerId.trim();
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/players?player_id=eq.${clean}`, {
+      method: "DELETE",
+      headers: getHeaders(),
+    });
+    return res.ok;
+  }
+
+  // 6. Get Logs (from player-gifts)
+  async getLogs(limit: number = 100): Promise<RedemptionLog[]> {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/player-gifts?select=*&order=created_at.desc&limit=${limit}`, {
+      headers: getHeaders(),
+      cache: "no-store",
+    });
+
+    if (!res.ok) return [];
+    const rows = await res.json();
+    return rows.map((r: any) => ({
+      id: String(r.id || Math.random()),
+      timestamp: r.created_at || r.timestamp || new Date().toISOString(),
+      playerId: String(r.player_id || r.playerId || ""),
+      playerName: r.player_name || r.playerName || `Player ${r.player_id}`,
+      giftCode: r.gift_code || r.giftCode || "",
+      status: (r.status || "SUCCESS") as any,
+      message: r.message || "Redeemed successfully",
+      httpStatus: r.http_status || 200,
+    }));
+  }
+
+  // 7. Add Logs (into player-gifts)
+  async addLogs(logs: RedemptionLog[]): Promise<void> {
+    const rows = logs.map((l) => ({
+      player_id: l.playerId,
+      player_name: l.playerName,
+      gift_code: l.giftCode,
+      status: l.status,
+      message: l.message,
+      http_status: l.httpStatus,
+      created_at: l.timestamp,
+    }));
+
+    await fetch(`${SUPABASE_URL}/rest/v1/player-gifts`, {
+      method: "POST",
+      headers: getHeaders(true),
+      body: JSON.stringify(rows),
+    }).catch((e) => console.error("Failed to insert logs into Supabase player-gifts:", e));
   }
 
   async clearLogs(): Promise<void> {
-    cachedLogs = [];
-    await this.saveLogs([]);
+    await fetch(`${SUPABASE_URL}/rest/v1/player-gifts?id=gt.0`, {
+      method: "DELETE",
+      headers: getHeaders(),
+    }).catch(() => {});
   }
 
+  private lastCronSummary: CronRunSummary | null = null;
   async getLastCronRun(): Promise<CronRunSummary | null> {
-    if (cachedLastCronRun) {
-      return cachedLastCronRun;
-    }
-
-    try {
-      if (fs.existsSync(this.stateFile)) {
-        const raw = fs.readFileSync(this.stateFile, "utf-8");
-        cachedLastCronRun = JSON.parse(raw);
-        return cachedLastCronRun;
-      }
-    } catch (e) {
-      console.warn("Could not read state file:", e);
-    }
-    return null;
+    return this.lastCronSummary;
   }
-
   async setLastCronRun(summary: CronRunSummary): Promise<void> {
-    cachedLastCronRun = summary;
-    try {
-      fs.writeFileSync(this.stateFile, JSON.stringify(summary, null, 2), "utf-8");
-    } catch (e) {
-      console.warn("Failed to write state file:", e);
-    }
-  }
-
-  private async savePlayers(players: Player[]): Promise<void> {
-    try {
-      fs.writeFileSync(this.playersFile, JSON.stringify(players, null, 2), "utf-8");
-    } catch (e) {
-      console.warn("Failed to write players file:", e);
-    }
-  }
-
-  private async saveLogs(logs: RedemptionLog[]): Promise<void> {
-    try {
-      fs.writeFileSync(this.logsFile, JSON.stringify(logs, null, 2), "utf-8");
-    } catch (e) {
-      console.warn("Failed to write logs file:", e);
-    }
+    this.lastCronSummary = summary;
   }
 }
 
-export const storage = new FileAndMemoryStorage();
+// Export Supabase as the primary storage engine
+export const storage = new SupabaseStorage();
