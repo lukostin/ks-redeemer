@@ -1,50 +1,80 @@
 import fs from "fs";
 import path from "path";
 import { Player, RedemptionLog, CronRunSummary, StorageAdapter } from "./types";
+import { fetchPlayerDetailsFromMightpulse } from "./mightpulse";
 
-// Default dummy players list
+// Default seed players list with real in-game details
 const DEFAULT_PLAYERS: Player[] = [
   {
-    id: "p-1",
+    id: "p-mightpulse-1",
+    playerId: "47964263",
+    name: "『兔子_ᴾᴴ』",
+    nick_name: "『兔子_ᴾᴴ』",
+    kid: 1349,
+    alliance_abbr: "313",
+    alliance_name: "REBOOT",
+    upload_image: "2026/10/15/Gg3ZDL_1792024155.png",
+    avatar_url: "https://got-global-avatar.akamaized.net/avatar/2026/10/15/Gg3ZDL_1792024155.png",
+    power: 296088481,
+    town_center_level: 55,
+    status: "active",
+    notes: "Verified in-game profile from Mightpulse (Kingdom 1349)",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: "p-sample-main",
     playerId: "76301393",
     name: "LordAustin (Main)",
+    nick_name: "LordAustin",
+    kid: 1102,
+    alliance_abbr: "VNG",
+    alliance_name: "Vanguard Elite",
+    upload_image: null,
+    avatar_url: null,
+    power: 184500000,
+    town_center_level: 30,
     status: "active",
     notes: "Primary King Shot account (sample payload)",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
   {
-    id: "p-2",
+    id: "p-sample-alt1",
     playerId: "81204918",
     name: "ValkyriePrime",
+    nick_name: "ValkyriePrime",
+    kid: 1349,
+    alliance_abbr: "313",
+    alliance_name: "REBOOT",
+    upload_image: null,
+    avatar_url: null,
+    power: 142000000,
+    town_center_level: 28,
     status: "active",
-    notes: "Top damage dealer - auto-redeem enabled",
+    notes: "Auto-redeem verified recipient",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
   {
-    id: "p-3",
-    playerId: "90412854",
-    name: "ShadowStriker",
-    status: "active",
-    notes: "Guild defender alt account",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "p-4",
+    id: "p-sample-alt2",
     playerId: "65412903",
     name: "DragonSlayer_01",
+    nick_name: "DragonSlayer",
+    kid: 994,
+    alliance_abbr: "ARC",
+    alliance_name: "Archangels",
+    upload_image: null,
+    avatar_url: null,
+    power: 89000000,
+    town_center_level: 26,
     status: "paused",
-    notes: "Reserved account (currently paused)",
+    notes: "Reserved backup account",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
 ];
 
-// Determine writable data directory:
-// In local dev, use <projectRoot>/data
-// On Vercel serverless functions, use /tmp/ks-redeemer-data
 function getDataDir(): string {
   const isVercel = !!process.env.VERCEL;
   if (isVercel) {
@@ -70,7 +100,6 @@ function getDataDir(): string {
   return localDir;
 }
 
-// In-memory cache for fast read/writes and serverless process continuity
 let cachedPlayers: Player[] | null = null;
 let cachedLogs: RedemptionLog[] | null = null;
 let cachedLastCronRun: CronRunSummary | null = null;
@@ -80,7 +109,6 @@ class FileAndMemoryStorage implements StorageAdapter {
   private logsFile = path.join(getDataDir(), "logs.json");
   private stateFile = path.join(getDataDir(), "state.json");
 
-  // Read players from cache or disk
   async getPlayers(): Promise<Player[]> {
     if (cachedPlayers) {
       return [...cachedPlayers];
@@ -96,32 +124,46 @@ class FileAndMemoryStorage implements StorageAdapter {
       console.warn("Could not read players file, using default players:", e);
     }
 
-    // Initialize with defaults if empty or not found
     cachedPlayers = [...DEFAULT_PLAYERS];
     await this.savePlayers(cachedPlayers);
     return [...cachedPlayers];
   }
 
-  // Get single player
   async getPlayer(playerId: string): Promise<Player | null> {
     const players = await this.getPlayers();
     return players.find((p) => p.playerId === playerId || p.id === playerId) || null;
   }
 
-  // Add new player
   async addPlayer(data: Omit<Player, "id" | "createdAt" | "updatedAt">): Promise<Player> {
     const players = await this.getPlayers();
+    const cleanUid = data.playerId.trim();
 
-    const existing = players.find((p) => p.playerId.trim() === data.playerId.trim());
+    const existing = players.find((p) => p.playerId.trim() === cleanUid);
     if (existing) {
-      throw new Error(`Player with ID "${data.playerId}" already exists.`);
+      throw new Error(`Player with ID "${cleanUid}" already exists.`);
+    }
+
+    // Attempt to enrich with live in-game details from Mightpulse API
+    let inGameDetails: any = null;
+    try {
+      inGameDetails = await fetchPlayerDetailsFromMightpulse(cleanUid);
+    } catch (err) {
+      console.warn("Could not fetch Mightpulse details:", err);
     }
 
     const now = new Date().toISOString();
     const newPlayer: Player = {
       id: "p-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6),
-      playerId: data.playerId.trim(),
-      name: data.name.trim() || `Player ${data.playerId}`,
+      playerId: cleanUid,
+      name: inGameDetails?.nick_name || data.name?.trim() || `Player ${cleanUid}`,
+      nick_name: inGameDetails?.nick_name || data.nick_name?.trim() || data.name?.trim() || `Player ${cleanUid}`,
+      kid: inGameDetails?.kid !== undefined ? inGameDetails.kid : data.kid || null,
+      alliance_abbr: inGameDetails?.alliance_abbr || data.alliance_abbr || null,
+      alliance_name: inGameDetails?.alliance_name || data.alliance_name || null,
+      upload_image: inGameDetails?.upload_image || data.upload_image || null,
+      avatar_url: inGameDetails?.avatar_url || data.avatar_url || null,
+      power: inGameDetails?.power !== undefined ? inGameDetails.power : data.power || null,
+      town_center_level: inGameDetails?.town_center_level || data.town_center_level || null,
       status: data.status || "active",
       notes: data.notes?.trim() || "",
       createdAt: now,
@@ -134,7 +176,6 @@ class FileAndMemoryStorage implements StorageAdapter {
     return newPlayer;
   }
 
-  // Update existing player
   async updatePlayer(playerId: string, updates: Partial<Player>): Promise<Player> {
     const players = await this.getPlayers();
     const index = players.findIndex((p) => p.playerId === playerId || p.id === playerId);
@@ -148,6 +189,7 @@ class FileAndMemoryStorage implements StorageAdapter {
       ...updates,
       playerId: updates.playerId ? updates.playerId.trim() : current.playerId,
       name: updates.name !== undefined ? updates.name.trim() : current.name,
+      nick_name: updates.nick_name !== undefined ? updates.nick_name.trim() : current.nick_name,
       notes: updates.notes !== undefined ? updates.notes.trim() : current.notes,
       status: updates.status || current.status,
       updatedAt: new Date().toISOString(),
@@ -159,7 +201,6 @@ class FileAndMemoryStorage implements StorageAdapter {
     return updated;
   }
 
-  // Delete player
   async deletePlayer(playerId: string): Promise<boolean> {
     const players = await this.getPlayers();
     const filtered = players.filter((p) => p.playerId !== playerId && p.id !== playerId);
@@ -172,7 +213,6 @@ class FileAndMemoryStorage implements StorageAdapter {
     return true;
   }
 
-  // Fetch logs
   async getLogs(limit: number = 100): Promise<RedemptionLog[]> {
     if (cachedLogs) {
       return cachedLogs.slice(0, limit);
@@ -192,21 +232,18 @@ class FileAndMemoryStorage implements StorageAdapter {
     return [];
   }
 
-  // Append logs
   async addLogs(newLogs: RedemptionLog[]): Promise<void> {
     const current = await this.getLogs(500);
-    const updated = [...newLogs, ...current].slice(0, 500); // keep recent 500
+    const updated = [...newLogs, ...current].slice(0, 500);
     cachedLogs = updated;
     await this.saveLogs(updated);
   }
 
-  // Clear logs
   async clearLogs(): Promise<void> {
     cachedLogs = [];
     await this.saveLogs([]);
   }
 
-  // Last cron run summary
   async getLastCronRun(): Promise<CronRunSummary | null> {
     if (cachedLastCronRun) {
       return cachedLastCronRun;
@@ -233,7 +270,6 @@ class FileAndMemoryStorage implements StorageAdapter {
     }
   }
 
-  // Helpers to persist to disk
   private async savePlayers(players: Player[]): Promise<void> {
     try {
       fs.writeFileSync(this.playersFile, JSON.stringify(players, null, 2), "utf-8");
@@ -251,5 +287,4 @@ class FileAndMemoryStorage implements StorageAdapter {
   }
 }
 
-// Export singleton instance
 export const storage = new FileAndMemoryStorage();

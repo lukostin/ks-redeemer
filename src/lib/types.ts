@@ -16,10 +16,19 @@ export interface GiftCode {
 
 export interface Player {
   id: string; // Internal unique ID or UUID
-  playerId: string; // The Kingshot player ID (e.g. "76301393")
-  name: string; // Player display nickname / identifier
+  playerId: string; // The Kingshot player ID / UID (e.g. "47964263")
+  name: string; // Display name
+  nick_name: string; // In-game nickname from API (e.g. 『兔子_ᴾᴴ』)
+  kid?: number | string | null; // Kingdom ID (e.g. 1349)
+  alliance_abbr?: string | null; // Alliance abbreviation (e.g. 313)
+  alliance_name?: string | null; // Alliance full name (e.g. REBOOT)
+  upload_image?: string | null; // In-game avatar image file path
+  avatar_url?: string | null; // Full CDN URL to avatar
+  power?: number | string | null; // Player combat power (e.g. 296088481)
+  town_center_level?: number | null; // Town center / stove level (e.g. 55)
   status: "active" | "paused"; // Active players participate in auto-redeem
   notes?: string;
+  redeemedCount?: number; // Number of auto-redeemed codes
   createdAt: string;
   updatedAt: string;
 }

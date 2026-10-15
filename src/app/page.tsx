@@ -29,7 +29,10 @@ import {
   ChevronRight,
   User,
   Award,
-  Terminal,
+  Zap,
+  Shield,
+  Castle,
+  Crosshair,
 } from "lucide-react";
 import { GiftCode, Player, RedemptionLog, DashboardStats, CronRunSummary } from "@/lib/types";
 
@@ -37,10 +40,32 @@ interface SupabasePlayerCard {
   id?: string | number;
   playerId: string;
   name: string;
+  nick_name: string;
+  kid?: number | string | null;
+  alliance_abbr?: string | null;
+  alliance_name?: string | null;
+  upload_image?: string | null;
+  avatar_url?: string | null;
+  power?: number | string | null;
+  town_center_level?: number | null;
   status: "active" | "paused";
   notes?: string;
   redeemedCount: number;
   createdAt?: string;
+}
+
+// Format power number nicely (e.g. 296,088,481 or 296.1M)
+function formatPower(power?: number | string | null): string {
+  if (power === null || power === undefined) return "—";
+  const num = typeof power === "number" ? power : Number(power);
+  if (isNaN(num)) return String(power);
+  if (num >= 1_000_000_000) {
+    return (num / 1_000_000_000).toFixed(2) + "B";
+  }
+  if (num >= 1_000_000) {
+    return (num / 1_000_000).toFixed(2) + "M";
+  }
+  return num.toLocaleString();
 }
 
 export default function Dashboard() {
@@ -58,7 +83,7 @@ export default function Dashboard() {
   // Selected Player for Profile Modal
   const [selectedProfilePlayer, setSelectedProfilePlayer] = useState<SupabasePlayerCard | null>(null);
 
-  // Data States
+  // Live Gift Codes, Logs & Stats
   const [giftCodes, setGiftCodes] = useState<GiftCode[]>([]);
   const [logs, setLogs] = useState<RedemptionLog[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -80,12 +105,14 @@ export default function Dashboard() {
   const [editingPlayer, setEditingPlayer] = useState<SupabasePlayerCard | null>(null);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
-  // Form State
+  // Add Player Form State & In-Game Lookup
   const [formPlayerId, setFormPlayerId] = useState("");
   const [formName, setFormName] = useState("");
   const [formNotes, setFormNotes] = useState("");
   const [formStatus, setFormStatus] = useState<"active" | "paused">("active");
   const [formSubmitting, setFormSubmitting] = useState(false);
+  const [isLookingUp, setIsLookingUp] = useState(false);
+  const [previewInGame, setPreviewInGame] = useState<any | null>(null);
 
   // Copy helper
   const handleCopy = (text: string, e?: React.MouseEvent) => {
@@ -134,7 +161,15 @@ export default function Dashboard() {
         let pList: SupabasePlayerCard[] = (localData.players || []).map((p: Player) => ({
           id: p.id,
           playerId: p.playerId,
-          name: p.name,
+          name: p.nick_name || p.name,
+          nick_name: p.nick_name || p.name,
+          kid: p.kid,
+          alliance_abbr: p.alliance_abbr,
+          alliance_name: p.alliance_name,
+          upload_image: p.upload_image,
+          avatar_url: p.avatar_url,
+          power: p.power,
+          town_center_level: p.town_center_level,
           status: p.status,
           notes: p.notes,
           redeemedCount: countMap[p.playerId] || 0,
@@ -142,10 +177,13 @@ export default function Dashboard() {
         }));
 
         if (searchPlayerId) {
+          const q = searchPlayerId.toLowerCase();
           pList = pList.filter(
             (p) =>
-              p.playerId.toLowerCase().includes(searchPlayerId.toLowerCase()) ||
-              p.name.toLowerCase().includes(searchPlayerId.toLowerCase())
+              p.playerId.toLowerCase().includes(q) ||
+              (p.nick_name && p.nick_name.toLowerCase().includes(q)) ||
+              (p.name && p.name.toLowerCase().includes(q)) ||
+              (p.alliance_abbr && p.alliance_abbr.toLowerCase().includes(q))
           );
         }
 
@@ -202,6 +240,35 @@ export default function Dashboard() {
     fetchAuxData();
   }, [fetchAuxData]);
 
+  // Live In-Game Lookup by UID in Add Player Modal
+  const handleLookupInGame = async (uidToLookup: string) => {
+    const uid = uidToLookup.trim();
+    if (!uid) return;
+    try {
+      setIsLookingUp(true);
+      const res = await fetch(`/api/players/lookup?uid=${uid}`);
+      const data = await res.json();
+      if (data.success && data.player) {
+        setPreviewInGame(data.player);
+        if (!formName) setFormName(data.player.nick_name);
+        setBanner({
+          type: "success",
+          message: `Found in-game player: ${data.player.nick_name} (Kingdom ${data.player.kid})`,
+        });
+      } else {
+        setPreviewInGame(null);
+        setBanner({
+          type: "warning",
+          message: data.error || "Player not found on Mightpulse API",
+        });
+      }
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setIsLookingUp(false);
+    }
+  };
+
   // Trigger auto-redeem for all
   const handleRunRedeemAll = async () => {
     if (isRunningRedeem) return;
@@ -252,28 +319,40 @@ export default function Dashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             playerId: formPlayerId.trim(),
-            name: formName.trim(),
+            name: formName.trim() || previewInGame?.nick_name,
+            nick_name: previewInGame?.nick_name || formName.trim(),
             notes: formNotes.trim(),
             status: formStatus,
           }),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
-        setBanner({ type: "success", message: `Player ${formName || formPlayerId} updated!` });
+        setBanner({ type: "success", message: `Player updated successfully!` });
       } else {
         const res = await fetch("/api/players", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             playerId: formPlayerId.trim(),
-            name: formName.trim(),
+            name: formName.trim() || previewInGame?.nick_name,
+            nick_name: previewInGame?.nick_name || formName.trim(),
+            kid: previewInGame?.kid,
+            alliance_abbr: previewInGame?.alliance_abbr,
+            alliance_name: previewInGame?.alliance_name,
+            upload_image: previewInGame?.upload_image,
+            avatar_url: previewInGame?.avatar_url,
+            power: previewInGame?.power,
+            town_center_level: previewInGame?.town_center_level,
             notes: formNotes.trim(),
             status: formStatus,
           }),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
-        setBanner({ type: "success", message: `Player ${formName || formPlayerId} registered!` });
+        setBanner({
+          type: "success",
+          message: `Player ${data.player?.nick_name || formPlayerId} added with full in-game details!`,
+        });
       }
 
       setIsAddPlayerOpen(false);
@@ -284,23 +363,6 @@ export default function Dashboard() {
       setBanner({ type: "error", message: err.message || "Failed to save player" });
     } finally {
       setFormSubmitting(false);
-    }
-  };
-
-  // Delete Player
-  const handleDeletePlayer = async (player: SupabasePlayerCard, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm(`Are you sure you want to remove player "${player.name}" (${player.playerId})?`)) return;
-
-    try {
-      const res = await fetch(`/api/players/${player.playerId}`, { method: "DELETE" });
-      const data = await res.json();
-      if (data.success) {
-        setBanner({ type: "success", message: `Player ${player.name} removed.` });
-        await fetchSupabaseData();
-      }
-    } catch (err: any) {
-      setBanner({ type: "error", message: err.message });
     }
   };
 
@@ -328,6 +390,7 @@ export default function Dashboard() {
     setFormNotes("");
     setFormStatus("active");
     setEditingPlayer(null);
+    setPreviewInGame(null);
   };
 
   const totalPages = Math.ceil(supabaseTotal / itemsPerPage) || 1;
@@ -346,7 +409,7 @@ export default function Dashboard() {
               <span className="brand-badge">PRO AUTO-ENGINE</span>
             </div>
             <div className="brand-subtitle">
-              King Shot Auto-Redeemer &bull; Connected to Supabase Database
+              Automated King Shot Gift Code Engine &bull; In-Game Profile Intelligence
             </div>
           </div>
         </div>
@@ -401,6 +464,7 @@ export default function Dashboard() {
             {banner.type === "success" && <CheckCircle2 size={18} />}
             {banner.type === "error" && <AlertCircle size={18} />}
             {banner.type === "info" && <RotateCw size={18} className="spin" />}
+            {banner.type === "warning" && <AlertCircle size={18} />}
             <span>{banner.message}</span>
           </div>
           <button
@@ -433,7 +497,7 @@ export default function Dashboard() {
             GRANT SELECT ON ALL TABLES IN SCHEMA kingshot TO anon, authenticated, service_role;
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-            (Showing cached player profiles and gift code redemption counts in the meantime)
+            (Displaying loaded player profiles and verified Mightpulse details in the meantime)
           </p>
         </div>
       )}
@@ -442,9 +506,9 @@ export default function Dashboard() {
       <section className="stats-grid">
         <div className="stat-card">
           <div className="stat-info">
-            <span className="stat-label">Active King Shot Gift Codes</span>
+            <span className="stat-label">Active Gift Codes</span>
             <span className="stat-value">{giftCodes.filter((c) => !c.isExpired).length}</span>
-            <span className="stat-subtext">Live from kingshot.net/api/gift-codes</span>
+            <span className="stat-subtext">kingshot.net/api/gift-codes</span>
           </div>
           <div className="stat-icon gold">
             <Gift size={24} />
@@ -453,9 +517,9 @@ export default function Dashboard() {
 
         <div className="stat-card">
           <div className="stat-info">
-            <span className="stat-label">Tracked Players</span>
+            <span className="stat-label">Tracked In-Game Players</span>
             <span className="stat-value">{supabaseTotal}</span>
-            <span className="stat-subtext">In Supabase kingshot.players</span>
+            <span className="stat-subtext">With auto-redemption enabled</span>
           </div>
           <div className="stat-icon cyan">
             <Users size={24} />
@@ -466,7 +530,7 @@ export default function Dashboard() {
           <div className="stat-info">
             <span className="stat-label">Auto-Redeemed Codes Logged</span>
             <span className="stat-value">{logs.filter((l) => l.status === "SUCCESS").length || totalAutoRedeemedGifts}</span>
-            <span className="stat-subtext">Successful gift claim events</span>
+            <span className="stat-subtext">Successful gift claims</span>
           </div>
           <div className="stat-icon green">
             <Award size={24} />
@@ -477,7 +541,7 @@ export default function Dashboard() {
           <div className="stat-info">
             <span className="stat-label">Scheduler Status</span>
             <span className="stat-value" style={{ fontSize: "20px" }}>Every 3 Hours</span>
-            <span className="stat-subtext">Autonomous Vercel Cron</span>
+            <span className="stat-subtext">Vercel Cron Active</span>
           </div>
           <div className="stat-icon purple">
             <Clock size={24} />
@@ -485,13 +549,13 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* PRIMARY SECTION: PLAYERS CARDS WITH NUMBER OF GIFT CODES AUTO-REDEEMED */}
+      {/* PRIMARY SECTION: PLAYERS CARDS WITH IN-GAME ATTRIBUTES */}
       <section className="section">
         <div className="section-header">
           <div>
             <div className="section-title">
               <Users size={22} color="#00d2ff" />
-              <span>Registered Players &amp; Auto-Redeemed Codes</span>
+              <span>Player Cards &amp; In-Game Intelligence</span>
               <span
                 style={{
                   fontSize: "12px",
@@ -502,17 +566,17 @@ export default function Dashboard() {
                   fontWeight: 700,
                 }}
               >
-                {supabaseTotal} Players Found
+                {supabaseTotal} Players Registered
               </span>
             </div>
             <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginTop: "4px" }}>
-              Click any player card to inspect profile details. Search by Player ID below.
+              Displays in-game Nickname, Kingdom, Alliance, Power, and Auto-Redeemed Codes. Click any card to open profile.
             </p>
           </div>
 
           <div className="section-actions">
             {/* Search by Player ID */}
-            <div style={{ position: "relative", minWidth: "260px" }}>
+            <div style={{ position: "relative", minWidth: "280px" }}>
               <Search
                 size={16}
                 style={{
@@ -525,7 +589,7 @@ export default function Dashboard() {
               />
               <input
                 type="text"
-                placeholder="Search by Player ID (e.g. 76301393)..."
+                placeholder="Search by Player UID (e.g. 47964263)..."
                 className="input"
                 style={{ paddingLeft: "36px", height: "40px" }}
                 value={searchPlayerId}
@@ -568,8 +632,8 @@ export default function Dashboard() {
             </h4>
             <p style={{ fontSize: "14px", color: "var(--text-secondary)", maxWidth: "420px", margin: "0 auto" }}>
               {searchPlayerId
-                ? `No player matches ID or name "${searchPlayerId}". Try another query.`
-                : "No players in the database yet. Click 'Add Player' to add your first King Shot account."}
+                ? `No player matches UID or name "${searchPlayerId}". Try another query.`
+                : "No players in the database yet. Click 'Add Player' to register your first King Shot account."}
             </p>
           </div>
         ) : (
@@ -583,17 +647,27 @@ export default function Dashboard() {
                   onClick={() => setSelectedProfilePlayer(player)}
                 >
                   <div>
-                    {/* Card Header */}
+                    {/* Card Header with In-Game Avatar & Tags */}
                     <div className="player-card-header">
                       <div className="player-avatar">
-                        {player.name ? player.name.charAt(0).toUpperCase() : "P"}
+                        {player.avatar_url ? (
+                          <img
+                            src={player.avatar_url}
+                            alt={player.nick_name || player.name}
+                            className="player-avatar-img"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <span>{player.nick_name ? player.nick_name.charAt(0).toUpperCase() : "P"}</span>
+                        )}
                       </div>
-                      <div className="player-card-info">
-                        <div className="player-card-name" title={player.name}>
-                          {player.name}
+
+                      <div className="player-card-info" style={{ flex: 1 }}>
+                        <div className="player-card-name" title={player.nick_name || player.name}>
+                          {player.nick_name || player.name}
                         </div>
                         <div className="player-card-id">
-                          <span>ID: {player.playerId}</span>
+                          <span>UID: {player.playerId}</span>
                           <button
                             onClick={(e) => handleCopy(player.playerId, e)}
                             style={{
@@ -602,7 +676,7 @@ export default function Dashboard() {
                               color: "var(--text-muted)",
                               cursor: "pointer",
                             }}
-                            title="Copy Player ID"
+                            title="Copy UID"
                           >
                             {copiedText === player.playerId ? (
                               <Check size={12} color="#10b981" />
@@ -614,7 +688,39 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* Auto Redeemed Gift Codes Metric Banner */}
+                    {/* In-Game Badges Row: Alliance + Kingdom + Power */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: "6px",
+                        marginTop: "12px",
+                      }}
+                    >
+                      {player.alliance_abbr && (
+                        <span className="alliance-tag" title={player.alliance_name || "Alliance"}>
+                          <Shield size={10} />
+                          <span>[{player.alliance_abbr}]</span>
+                        </span>
+                      )}
+
+                      {player.kid !== null && player.kid !== undefined && (
+                        <span className="kingdom-tag">
+                          <Castle size={10} />
+                          <span>K#{player.kid}</span>
+                        </span>
+                      )}
+
+                      {player.power !== null && player.power !== undefined && (
+                        <span className="power-badge" style={{ marginLeft: "auto" }}>
+                          <Zap size={13} fill="#fbbf24" />
+                          <span>{formatPower(player.power)}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Auto-Redeemed Gift Codes Metric Banner */}
                     <div className="player-card-stat" style={{ marginTop: "14px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <Gift size={16} color="#10b981" />
@@ -625,13 +731,13 @@ export default function Dashboard() {
                       </span>
                     </div>
 
-                    {/* Notes if present */}
+                    {/* Optional Note / Status text */}
                     {player.notes && (
                       <p
                         style={{
                           fontSize: "12px",
                           color: "var(--text-secondary)",
-                          marginTop: "10px",
+                          marginTop: "8px",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
@@ -662,7 +768,7 @@ export default function Dashboard() {
                       <span>{isActive ? "Active" : "Paused"}</span>
                     </button>
 
-                    {/* Profile Trigger Button */}
+                    {/* View Profile Action */}
                     <button
                       className="btn btn-secondary btn-sm"
                       onClick={(e) => {
@@ -705,7 +811,6 @@ export default function Dashboard() {
               </button>
 
               {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
-                // Show first, last, and window around current page
                 if (
                   pageNum === 1 ||
                   pageNum === totalPages ||
@@ -757,25 +862,38 @@ export default function Dashboard() {
         )}
       </section>
 
-      {/* PLAYER PROFILE MODAL (READY FOR USER INSTRUCTIONS) */}
+      {/* DETAILED PLAYER PROFILE MODAL */}
       {selectedProfilePlayer && (
         <div className="modal-overlay" onClick={() => setSelectedProfilePlayer(null)}>
           <div
             className="modal-content"
-            style={{ maxWidth: "600px" }}
+            style={{ maxWidth: "640px" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
-              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                <div className="player-avatar" style={{ width: "42px", height: "42px" }}>
-                  {selectedProfilePlayer.name ? selectedProfilePlayer.name.charAt(0).toUpperCase() : "P"}
+              <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                <div className="player-avatar" style={{ width: "58px", height: "58px" }}>
+                  {selectedProfilePlayer.avatar_url ? (
+                    <img
+                      src={selectedProfilePlayer.avatar_url}
+                      alt={selectedProfilePlayer.nick_name || selectedProfilePlayer.name}
+                      className="player-avatar-img"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <span>
+                      {selectedProfilePlayer.nick_name
+                        ? selectedProfilePlayer.nick_name.charAt(0).toUpperCase()
+                        : "P"}
+                    </span>
+                  )}
                 </div>
                 <div>
-                  <div className="modal-title" style={{ fontSize: "18px", marginBottom: "2px" }}>
-                    {selectedProfilePlayer.name}
+                  <div className="modal-title" style={{ fontSize: "20px", marginBottom: "2px" }}>
+                    {selectedProfilePlayer.nick_name || selectedProfilePlayer.name}
                   </div>
                   <div style={{ fontFamily: "monospace", fontSize: "13px", color: "#38bdf8" }}>
-                    Player ID: {selectedProfilePlayer.playerId}
+                    UID: {selectedProfilePlayer.playerId}
                   </div>
                 </div>
               </div>
@@ -787,86 +905,72 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Profile Overview Stats */}
+            {/* In-Game Attributes 4-Grid */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 1fr",
+                gridTemplateColumns: "repeat(2, 1fr)",
                 gap: "12px",
                 margin: "18px 0",
               }}
             >
               <div className="player-card-stat" style={{ flexDirection: "column", alignItems: "flex-start", gap: "4px" }}>
-                <span className="player-card-stat-label">Total Auto-Redeemed Codes</span>
-                <span className="player-card-stat-value" style={{ fontSize: "24px" }}>
-                  {selectedProfilePlayer.redeemedCount} Codes
+                <span className="player-card-stat-label">Combat Power</span>
+                <span className="player-card-stat-value" style={{ fontSize: "20px", color: "#fbbf24" }}>
+                  ⚡ {selectedProfilePlayer.power ? Number(selectedProfilePlayer.power).toLocaleString() : "—"}
                 </span>
               </div>
 
               <div className="player-card-stat" style={{ flexDirection: "column", alignItems: "flex-start", gap: "4px" }}>
-                <span className="player-card-stat-label">Scheduler Status</span>
-                <span
-                  style={{
-                    fontSize: "14px",
-                    fontWeight: 700,
-                    color: selectedProfilePlayer.status === "active" ? "#34d399" : "#94a3b8",
-                  }}
-                >
-                  {selectedProfilePlayer.status === "active"
-                    ? "✓ Active (Included in 3h Cron)"
-                    : "✕ Paused (Skipped)"}
+                <span className="player-card-stat-label">Auto-Redeemed Codes</span>
+                <span className="player-card-stat-value" style={{ fontSize: "20px" }}>
+                  🎁 {selectedProfilePlayer.redeemedCount} Codes
+                </span>
+              </div>
+
+              <div className="player-card-stat" style={{ flexDirection: "column", alignItems: "flex-start", gap: "4px" }}>
+                <span className="player-card-stat-label">Alliance Membership</span>
+                <span style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary)" }}>
+                  {selectedProfilePlayer.alliance_abbr ? `[${selectedProfilePlayer.alliance_abbr}] ${selectedProfilePlayer.alliance_name || ""}` : "None / Unaligned"}
+                </span>
+              </div>
+
+              <div className="player-card-stat" style={{ flexDirection: "column", alignItems: "flex-start", gap: "4px" }}>
+                <span className="player-card-stat-label">Kingdom / Server</span>
+                <span style={{ fontSize: "15px", fontWeight: 700, color: "#38bdf8" }}>
+                  {selectedProfilePlayer.kid ? `Kingdom #${selectedProfilePlayer.kid}` : "—"}
                 </span>
               </div>
             </div>
 
-            {/* Ready for additional profile fields placeholder */}
-            <div
-              style={{
-                background: "rgba(0, 210, 255, 0.05)",
-                border: "1px dashed rgba(0, 210, 255, 0.25)",
-                borderRadius: "12px",
-                padding: "16px",
-                marginBottom: "20px",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#38bdf8", fontWeight: 600, fontSize: "13px", marginBottom: "6px" }}>
-                <Sparkles size={16} />
-                <span>Player Profile Configuration</span>
-              </div>
-              <p style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                Ready to display custom game profile attributes (level, kingdom/server, guild/alliance, power, last redemption history, etc.). Tell me what details you want shown here!
-              </p>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            {/* Profile Action Footer */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "20px" }}>
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={() => handleCopy(selectedProfilePlayer.playerId)}
               >
                 <Copy size={14} />
-                <span>Copy Player ID</span>
+                <span>Copy Player UID</span>
               </button>
 
-              <div style={{ display: "flex", gap: "10px" }}>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => setSelectedProfilePlayer(null)}
-                >
-                  Close
-                </button>
-              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => setSelectedProfilePlayer(null)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ADD / EDIT PLAYER MODAL */}
+      {/* ADD PLAYER MODAL WITH LIVE IN-GAME API PREVIEW */}
       {isAddPlayerOpen && (
         <div className="modal-overlay" onClick={() => setIsAddPlayerOpen(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title">
-                {editingPlayer ? "Edit King Shot Player" : "Register King Shot Player"}
+                {editingPlayer ? "Edit King Shot Player" : "Register Player by UID"}
               </div>
               <button
                 onClick={() => setIsAddPlayerOpen(false)}
@@ -878,25 +982,76 @@ export default function Dashboard() {
 
             <form onSubmit={handleSavePlayer}>
               <div className="form-group">
-                <label className="form-label">King Shot Player ID *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. 76301393"
-                  className="input"
-                  value={formPlayerId}
-                  onChange={(e) => setFormPlayerId(e.target.value)}
-                />
+                <label className="form-label">King Shot Player UID *</label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 47964263"
+                    className="input"
+                    value={formPlayerId}
+                    onChange={(e) => {
+                      setFormPlayerId(e.target.value);
+                      setPreviewInGame(null);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handleLookupInGame(formPlayerId)}
+                    disabled={isLookingUp || !formPlayerId.trim()}
+                    title="Fetch live player details from Mightpulse API"
+                  >
+                    {isLookingUp ? (
+                      <RotateCw size={14} className="spin" />
+                    ) : (
+                      <Search size={14} />
+                    )}
+                    <span>{isLookingUp ? "Checking..." : "Fetch"}</span>
+                  </button>
+                </div>
                 <span className="form-hint">
-                  The numeric player identifier found in King Shot in-game profile.
+                  Enter UID (e.g. 47964263). Clicking &quot;Fetch&quot; retrieves live in-game details from Mightpulse.
                 </span>
               </div>
+
+              {/* LIVE IN-GAME PREVIEW CARD */}
+              {previewInGame && (
+                <div
+                  style={{
+                    background: "rgba(0, 210, 255, 0.08)",
+                    border: "1px solid rgba(0, 210, 255, 0.3)",
+                    borderRadius: "12px",
+                    padding: "14px",
+                    marginBottom: "16px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    {previewInGame.avatar_url && (
+                      <img
+                        src={previewInGame.avatar_url}
+                        alt={previewInGame.nick_name}
+                        style={{ width: "48px", height: "48px", borderRadius: "10px", objectFit: "cover" }}
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: "15px", color: "var(--text-primary)" }}>
+                        {previewInGame.nick_name}
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#38bdf8" }}>
+                        K#{previewInGame.kid} &bull; {previewInGame.alliance_abbr ? `[${previewInGame.alliance_abbr}] ${previewInGame.alliance_name}` : "No Alliance"} &bull; ⚡ {formatPower(previewInGame.power)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Player Nickname / Label</label>
                 <input
                   type="text"
-                  placeholder="e.g. LordAustin (Main Account)"
+                  placeholder="Will be auto-populated from Mightpulse if left blank"
                   className="input"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
@@ -904,7 +1059,7 @@ export default function Dashboard() {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Auto-Redeem Scheduler</label>
+                <label className="form-label">Auto-Redemption Status</label>
                 <select
                   className="select"
                   value={formStatus}
@@ -941,7 +1096,7 @@ export default function Dashboard() {
                       <span>Saving...</span>
                     </>
                   ) : (
-                    <span>{editingPlayer ? "Save Changes" : "Register Player"}</span>
+                    <span>Register Player</span>
                   )}
                 </button>
               </div>
@@ -957,7 +1112,7 @@ export default function Dashboard() {
             <div className="modal-header">
               <div className="modal-title" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <Server size={20} color="#00d2ff" />
-                <span>Vercel Cron &amp; Supabase Integration Details</span>
+                <span>Vercel Cron &amp; Database Intelligence Details</span>
               </div>
               <button
                 onClick={() => setIsGuideOpen(false)}
@@ -970,15 +1125,18 @@ export default function Dashboard() {
             <div style={{ display: "flex", flexDirection: "column", gap: "16px", fontSize: "14px", lineHeight: "1.6", color: "var(--text-secondary)" }}>
               <div>
                 <strong style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
-                  <Database size={16} color="#a855f7" />
-                  Connected Supabase Project
+                  <Crosshair size={16} color="#00d2ff" />
+                  Live In-Game API Integration
                 </strong>
                 <p style={{ marginTop: "4px" }}>
-                  REST Endpoints:
+                  Connected to <code style={{ color: "#38bdf8" }}>https://mightpulse.com/api/players/[uid]</code> to automatically pull:
                 </p>
                 <ul style={{ paddingLeft: "20px", marginTop: "4px" }}>
-                  <li><code style={{ color: "#38bdf8" }}>https://rcqdzisofoblqvbjvcbp.supabase.co/rest/v1/kingshot.players</code></li>
-                  <li><code style={{ color: "#38bdf8" }}>https://rcqdzisofoblqvbjvcbp.supabase.co/rest/v1/kingshot.player-gifts</code></li>
+                  <li><code style={{ color: "#38bdf8" }}>nick_name</code> (Player name)</li>
+                  <li><code style={{ color: "#38bdf8" }}>kid</code> (Kingdom number)</li>
+                  <li><code style={{ color: "#38bdf8" }}>alliance_abbr</code> &amp; <code style={{ color: "#38bdf8" }}>alliance_name</code></li>
+                  <li><code style={{ color: "#38bdf8" }}>upload_image</code> / <code style={{ color: "#38bdf8" }}>avatar_url</code></li>
+                  <li><code style={{ color: "#38bdf8" }}>power</code> (Combat rating)</li>
                 </ul>
               </div>
 
@@ -988,7 +1146,7 @@ export default function Dashboard() {
                   Vercel Cron (0 */3 * * *)
                 </strong>
                 <p style={{ marginTop: "4px" }}>
-                  Configured in <code style={{ color: "#38bdf8" }}>vercel.json</code> to hit <code style={{ color: "#38bdf8" }}>/api/cron/redeem</code> every 3 hours with zero human intervention.
+                  Automatically hits <code style={{ color: "#38bdf8" }}>/api/cron/redeem</code> every 3 hours with zero human intervention.
                 </p>
               </div>
             </div>

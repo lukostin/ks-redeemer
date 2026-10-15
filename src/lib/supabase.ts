@@ -5,16 +5,23 @@ const SUPABASE_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjcWR6aXNvZm9ibHF2Ymp2Y2JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NzgwODgsImV4cCI6MjEwMjM1NDA4OH0.qF1Ay8-UIzalTDf4OcewhP_SdIAsMzM6sCT3P88syNo";
 
+const AVATAR_CDN_BASE = "https://got-global-avatar.akamaized.net/avatar/";
+
 export interface SupabasePlayer {
   id?: string | number;
-  playerId?: string;
-  player_id?: string;
-  name?: string;
-  playerName?: string;
-  nickname?: string;
-  status?: string;
+  playerId: string;
+  name: string;
+  nick_name: string;
+  kid?: number | string | null;
+  alliance_abbr?: string | null;
+  alliance_name?: string | null;
+  upload_image?: string | null;
+  avatar_url?: string | null;
+  power?: number | string | null;
+  town_center_level?: number | null;
+  status: "active" | "paused";
+  notes?: string;
   redeemedCount?: number;
-  created_at?: string;
   createdAt?: string;
   [key: string]: any;
 }
@@ -30,10 +37,6 @@ export interface SupabasePlayerGift {
   [key: string]: any;
 }
 
-/**
- * Fetch data from Supabase REST API
- * Tries both with Accept-Profile: kingshot and direct path
- */
 async function fetchSupabaseTable(tableName: string) {
   const headers: Record<string, string> = {
     apikey: SUPABASE_KEY,
@@ -42,12 +45,10 @@ async function fetchSupabaseTable(tableName: string) {
     "Accept-Profile": "kingshot",
   };
 
-  // Attempt 1: Schema header 'Accept-Profile: kingshot'
   let url = `${SUPABASE_URL}/rest/v1/${tableName}?select=*`;
   let res = await fetch(url, { headers, cache: "no-store" });
 
   if (res.status === 404) {
-    // Attempt 2: If table has prefix or exact name in public
     const fallbackUrl = `${SUPABASE_URL}/rest/v1/kingshot.${tableName}?select=*`;
     const fallbackRes = await fetch(fallbackUrl, {
       headers: {
@@ -74,16 +75,12 @@ async function fetchSupabaseTable(tableName: string) {
   return await res.json();
 }
 
-/**
- * Fetch all players from Supabase and join with auto-redeemed gifts count
- */
 export async function getSupabasePlayersWithGifts(): Promise<{
   players: SupabasePlayer[];
   totalGiftsCount: number;
   error?: string;
 }> {
   try {
-    // 1. Fetch players
     let rawPlayers: any[] = [];
     try {
       rawPlayers = await fetchSupabaseTable("players");
@@ -95,7 +92,6 @@ export async function getSupabasePlayersWithGifts(): Promise<{
       }
     }
 
-    // 2. Fetch gifts / redemptions to compute auto-redeemed count per player
     let rawGifts: any[] = [];
     try {
       rawGifts = await fetchSupabaseTable("player-gifts");
@@ -107,7 +103,6 @@ export async function getSupabasePlayersWithGifts(): Promise<{
       }
     }
 
-    // Map gift counts by player ID
     const giftCountMap: Record<string, number> = {};
     for (const g of rawGifts) {
       const pid = String(g.player_id || g.playerId || g.player || "");
@@ -116,14 +111,28 @@ export async function getSupabasePlayersWithGifts(): Promise<{
       }
     }
 
-    // Merge count into each player
     const players: SupabasePlayer[] = rawPlayers.map((p) => {
-      const resolvedPlayerId = String(p.playerId || p.player_id || p.id || "");
+      const resolvedPlayerId = String(p.playerId || p.player_id || p.uid || p.id || "");
       const count = giftCountMap[resolvedPlayerId] || 0;
+      const uploadImage = p.upload_image || null;
+      let avatarUrl = p.avatar_url || null;
+      if (!avatarUrl && uploadImage) {
+        avatarUrl = `${AVATAR_CDN_BASE}${uploadImage}`;
+      }
+
       return {
         ...p,
         playerId: resolvedPlayerId,
-        name: p.name || p.playerName || p.nickname || `Player ${resolvedPlayerId}`,
+        name: p.nick_name || p.name || p.playerName || `Player ${resolvedPlayerId}`,
+        nick_name: p.nick_name || p.name || `Player ${resolvedPlayerId}`,
+        kid: p.kid !== undefined ? p.kid : null,
+        alliance_abbr: p.alliance_abbr || null,
+        alliance_name: p.alliance_name || null,
+        upload_image: uploadImage,
+        avatar_url: avatarUrl,
+        power: p.power !== undefined ? p.power : null,
+        town_center_level: p.town_center_level || p.stove_lv || null,
+        status: p.status === "paused" ? "paused" : "active",
         redeemedCount: count,
       };
     });
