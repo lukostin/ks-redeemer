@@ -6,7 +6,7 @@ const SUPABASE_URL =
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjcWR6aXNvZm9ibHF2Ymp2Y2JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NzgwODgsImV4cCI6MjEwMjM1NDA4OH0.qF1Ay8-UIzalTDf4OcewhP_SdIAsMzM6sCT3P88syNo";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjcWR6aXNvZm9ibHF2Ymp2Y2JwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Njc3ODA4OCwiZXhwIjoyMTAyMzU0MDg4fQ.2b-SUvcj5_7AAt80pModdMC0-TD93Ege3lzkmKrZWeA";
 
 const AVATAR_CDN_BASE = "https://got-global-avatar.akamaized.net/avatar/";
 
@@ -25,14 +25,10 @@ function getHeaders(isWrite = false): Record<string, string> {
   return headers;
 }
 
-/**
- * Direct Supabase Database Storage Adapter
- * Connects directly to kingshot.players and kingshot.player-gifts
- */
 export class SupabaseStorage implements StorageAdapter {
-  // 1. Fetch Players from Supabase
+  // 1. Fetch Players from Supabase kingshot.players
   async getPlayers(): Promise<Player[]> {
-    const url = `${SUPABASE_URL}/rest/v1/players?select=*`;
+    const url = `${SUPABASE_URL}/rest/v1/players?select=*&order=id.asc`;
     const res = await fetch(url, {
       headers: getHeaders(),
       cache: "no-store",
@@ -45,7 +41,7 @@ export class SupabaseStorage implements StorageAdapter {
 
     const rows: any[] = await res.json();
 
-    // Fetch gifts count to map redeemedCount
+    // Map auto-redeemed gifts count from kingshot.player-gifts
     let giftsCountMap: Record<string, number> = {};
     try {
       const giftsRes = await fetch(`${SUPABASE_URL}/rest/v1/player-gifts?select=player_id`, {
@@ -64,30 +60,30 @@ export class SupabaseStorage implements StorageAdapter {
     }
 
     return rows.map((r) => {
-      const pid = String(r.player_id || r.playerId || r.uid || r.id || "");
+      const pid = String(r.playerId || r.player_id || r.uid || r.id || "");
       const uploadImage = r.upload_image || null;
       let avatarUrl = r.avatar_url || null;
       if (!avatarUrl && uploadImage) {
-        avatarUrl = `${AVATAR_CDN_BASE}${uploadImage}`;
+        avatarUrl = `${AVATAR_CDN_BASE}${uploadImage.replace(/^\/+/, "")}`;
       }
 
       return {
         id: String(r.id || pid),
         playerId: pid,
-        name: r.nick_name || r.name || `Player ${pid}`,
-        nick_name: r.nick_name || r.name || `Player ${pid}`,
+        name: r.nick_name || `Player ${pid}`,
+        nick_name: r.nick_name || `Player ${pid}`,
         kid: r.kid !== undefined ? r.kid : null,
         alliance_abbr: r.alliance_abbr || null,
         alliance_name: r.alliance_name || null,
         upload_image: uploadImage,
         avatar_url: avatarUrl,
         power: r.power !== undefined ? r.power : null,
-        town_center_level: r.town_center_level || r.stove_lv || null,
+        town_center_level: r.town_center_level || null,
         status: r.status === "paused" ? "paused" : "active",
         notes: r.notes || "",
         redeemedCount: giftsCountMap[pid] || 0,
-        createdAt: r.created_at || r.createdAt || new Date().toISOString(),
-        updatedAt: r.updated_at || r.updatedAt || new Date().toISOString(),
+        createdAt: r.created_at || new Date().toISOString(),
+        updatedAt: r.created_at || new Date().toISOString(),
       };
     });
   }
@@ -95,7 +91,7 @@ export class SupabaseStorage implements StorageAdapter {
   // 2. Get Single Player
   async getPlayer(playerId: string): Promise<Player | null> {
     const clean = playerId.trim();
-    const url = `${SUPABASE_URL}/rest/v1/players?or=(player_id.eq.${clean},id.eq.${clean})&select=*`;
+    const url = `${SUPABASE_URL}/rest/v1/players?playerId=eq.${clean}&select=*`;
     const res = await fetch(url, {
       headers: getHeaders(),
       cache: "no-store",
@@ -106,23 +102,29 @@ export class SupabaseStorage implements StorageAdapter {
     if (!rows || rows.length === 0) return null;
 
     const r = rows[0];
-    const pid = String(r.player_id || r.playerId || r.id || "");
+    const pid = String(r.playerId || r.player_id || r.id || "");
+    const uploadImage = r.upload_image || null;
+    let avatarUrl = r.avatar_url || null;
+    if (!avatarUrl && uploadImage) {
+      avatarUrl = `${AVATAR_CDN_BASE}${uploadImage.replace(/^\/+/, "")}`;
+    }
+
     return {
       id: String(r.id || pid),
       playerId: pid,
-      name: r.nick_name || r.name || `Player ${pid}`,
-      nick_name: r.nick_name || r.name || `Player ${pid}`,
+      name: r.nick_name || `Player ${pid}`,
+      nick_name: r.nick_name || `Player ${pid}`,
       kid: r.kid,
       alliance_abbr: r.alliance_abbr,
       alliance_name: r.alliance_name,
-      upload_image: r.upload_image,
-      avatar_url: r.avatar_url,
+      upload_image: uploadImage,
+      avatar_url: avatarUrl,
       power: r.power,
       town_center_level: r.town_center_level,
       status: r.status === "paused" ? "paused" : "active",
       notes: r.notes || "",
       createdAt: r.created_at || new Date().toISOString(),
-      updatedAt: r.updated_at || new Date().toISOString(),
+      updatedAt: r.created_at || new Date().toISOString(),
     };
   }
 
@@ -130,7 +132,7 @@ export class SupabaseStorage implements StorageAdapter {
   async addPlayer(data: Omit<Player, "id" | "createdAt" | "updatedAt">): Promise<Player> {
     const cleanUid = data.playerId.trim();
 
-    // Query in-game details from Mightpulse
+    // Query in-game details from Mightpulse API
     let inGame: any = null;
     try {
       inGame = await fetchPlayerDetailsFromMightpulse(cleanUid);
@@ -138,21 +140,26 @@ export class SupabaseStorage implements StorageAdapter {
       console.warn("Mightpulse lookup failed:", e);
     }
 
+    let fullAvatarUrl: string | null = null;
+    if (inGame?.upload_image) {
+      fullAvatarUrl = `${AVATAR_CDN_BASE}${inGame.upload_image.replace(/^\/+/, "")}`;
+    } else if (inGame?.avatar_url) {
+      fullAvatarUrl = inGame.avatar_url;
+    }
+
     const payload: any = {
-      player_id: cleanUid,
-      name: inGame?.nick_name || data.name || data.nick_name || `Player ${cleanUid}`,
+      playerId: cleanUid,
       nick_name: inGame?.nick_name || data.nick_name || data.name || `Player ${cleanUid}`,
       status: data.status || "active",
       notes: data.notes || "",
+      kid: inGame?.kid !== undefined ? inGame.kid : (data.kid || null),
+      alliance_abbr: inGame?.alliance_abbr || data.alliance_abbr || null,
+      alliance_name: inGame?.alliance_name || data.alliance_name || null,
+      upload_image: inGame?.upload_image || data.upload_image || null,
+      avatar_url: fullAvatarUrl || data.avatar_url || null,
+      power: inGame?.power !== undefined ? inGame.power : (data.power || null),
+      town_center_level: inGame?.town_center_level || data.town_center_level || null,
     };
-
-    if (inGame?.kid !== undefined) payload.kid = inGame.kid;
-    if (inGame?.alliance_abbr) payload.alliance_abbr = inGame.alliance_abbr;
-    if (inGame?.alliance_name) payload.alliance_name = inGame.alliance_name;
-    if (inGame?.upload_image) payload.upload_image = inGame.upload_image;
-    if (inGame?.avatar_url) payload.avatar_url = inGame.avatar_url;
-    if (inGame?.power !== undefined) payload.power = inGame.power;
-    if (inGame?.town_center_level) payload.town_center_level = inGame.town_center_level;
 
     const res = await fetch(`${SUPABASE_URL}/rest/v1/players`, {
       method: "POST",
@@ -171,34 +178,35 @@ export class SupabaseStorage implements StorageAdapter {
     return {
       id: String(r?.id || cleanUid),
       playerId: cleanUid,
-      name: r?.name || payload.name,
-      nick_name: r?.nick_name || payload.nick_name,
-      kid: r?.kid || payload.kid,
-      alliance_abbr: r?.alliance_abbr || payload.alliance_abbr,
-      alliance_name: r?.alliance_name || payload.alliance_name,
-      upload_image: r?.upload_image || payload.upload_image,
-      avatar_url: r?.avatar_url || payload.avatar_url,
-      power: r?.power || payload.power,
-      town_center_level: r?.town_center_level || payload.town_center_level,
-      status: r?.status || payload.status,
-      notes: r?.notes || payload.notes,
+      name: payload.nick_name,
+      nick_name: payload.nick_name,
+      kid: payload.kid,
+      alliance_abbr: payload.alliance_abbr,
+      alliance_name: payload.alliance_name,
+      upload_image: payload.upload_image,
+      avatar_url: payload.avatar_url,
+      power: payload.power,
+      town_center_level: payload.town_center_level,
+      status: payload.status,
+      notes: payload.notes,
       createdAt: r?.created_at || new Date().toISOString(),
-      updatedAt: r?.updated_at || new Date().toISOString(),
+      updatedAt: r?.created_at || new Date().toISOString(),
     };
   }
 
-  // 4. Update Player
+  // 4. Update Player in Supabase
   async updatePlayer(playerId: string, updates: Partial<Player>): Promise<Player> {
     const clean = playerId.trim();
     const payload: any = {};
-    if (updates.name !== undefined) payload.name = updates.name;
     if (updates.nick_name !== undefined) payload.nick_name = updates.nick_name;
+    if (updates.name !== undefined && !updates.nick_name) payload.nick_name = updates.name;
     if (updates.status !== undefined) payload.status = updates.status;
     if (updates.notes !== undefined) payload.notes = updates.notes;
     if (updates.kid !== undefined) payload.kid = updates.kid;
     if (updates.power !== undefined) payload.power = updates.power;
+    if (updates.avatar_url !== undefined) payload.avatar_url = updates.avatar_url;
 
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/players?player_id=eq.${clean}`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/players?playerId=eq.${clean}`, {
       method: "PATCH",
       headers: getHeaders(true),
       body: JSON.stringify(payload),
@@ -214,26 +222,26 @@ export class SupabaseStorage implements StorageAdapter {
     return {
       id: String(r?.id || clean),
       playerId: clean,
-      name: r?.name || updates.name || "",
-      nick_name: r?.nick_name || updates.nick_name || "",
+      name: r?.nick_name || updates.nick_name || updates.name || "",
+      nick_name: r?.nick_name || updates.nick_name || updates.name || "",
       status: r?.status || updates.status || "active",
       notes: r?.notes || updates.notes || "",
       createdAt: r?.created_at || new Date().toISOString(),
-      updatedAt: r?.updated_at || new Date().toISOString(),
+      updatedAt: r?.created_at || new Date().toISOString(),
     };
   }
 
-  // 5. Delete Player
+  // 5. Delete Player from Supabase
   async deletePlayer(playerId: string): Promise<boolean> {
     const clean = playerId.trim();
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/players?player_id=eq.${clean}`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/players?playerId=eq.${clean}`, {
       method: "DELETE",
       headers: getHeaders(),
     });
     return res.ok;
   }
 
-  // 6. Get Logs (from player-gifts)
+  // 6. Get Logs from Supabase kingshot.player-gifts
   async getLogs(limit: number = 100): Promise<RedemptionLog[]> {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/player-gifts?select=*&order=created_at.desc&limit=${limit}`, {
       headers: getHeaders(),
@@ -244,7 +252,7 @@ export class SupabaseStorage implements StorageAdapter {
     const rows = await res.json();
     return rows.map((r: any) => ({
       id: String(r.id || Math.random()),
-      timestamp: r.created_at || r.timestamp || new Date().toISOString(),
+      timestamp: r.created_at || new Date().toISOString(),
       playerId: String(r.player_id || r.playerId || ""),
       playerName: r.player_name || r.playerName || `Player ${r.player_id}`,
       giftCode: r.gift_code || r.giftCode || "",
@@ -254,7 +262,7 @@ export class SupabaseStorage implements StorageAdapter {
     }));
   }
 
-  // 7. Add Logs (into player-gifts)
+  // 7. Add Logs to Supabase kingshot.player-gifts
   async addLogs(logs: RedemptionLog[]): Promise<void> {
     const rows = logs.map((l) => ({
       player_id: l.playerId,
@@ -289,5 +297,4 @@ export class SupabaseStorage implements StorageAdapter {
   }
 }
 
-// Export Supabase as the primary storage engine
 export const storage = new SupabaseStorage();
